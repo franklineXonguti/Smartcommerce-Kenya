@@ -3,12 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from .models import Cart, CartItem, Wishlist, WishlistItem
+from .models import Cart, CartItem, Wishlist, WishlistItem, Order, OrderItem, OrderStatusHistory
 from .serializers import (
     CartSerializer, CartItemSerializer, AddToCartSerializer,
-    UpdateCartItemSerializer, WishlistSerializer, WishlistItemSerializer
+    UpdateCartItemSerializer, WishlistSerializer, WishlistItemSerializer,
+    OrderListSerializer, OrderDetailSerializer, CheckoutSerializer
 )
-from services.products.models import Product, ProductVariant
+from services.products.models import Product, ProductVariant, Coupon
+from services.users.models import Address
 
 
 class CartViewSet(viewsets.ViewSet):
@@ -234,3 +236,187 @@ class WishlistViewSet(viewsets.ViewSet):
         wishlist_item.delete()
         
         return Response({'message': 'Item moved to cart'}, status=status.HTTP_200_OK)
+
+
+
+class OrderViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API endpoint for order management.
+    Read-only for customers, with admin actions.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return OrderDetailSerializer
+        return OrderListSerializer
+    
+    def get_queryset(self):
+        """Return orders for the authenticated user."""
+        return Order.objects.filter(user=self.request.user).prefetch_related('items__variant__product')
+    
+    @action(detail=False, methods=['post'])
+    def checkout(self, request):
+        """
+        Create an order from the user's cart.
+        """
+        serializer = CheckoutSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        
+        # Get user's cart
+        try:
+            cart = Cart.objects.get(user=request.user)
+        except Cart.DoesNotExist:
+            return Response(
+                {'error': 'Cart is empty'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if cart.items.count() == 0:
+            return Response(
+                {'error': 'Cart is empty'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get address
+        address = get_object_or_404(Address, id=serializer.validated_data['address_id'], user=request.user)
+        
+        # Calculate totals
+        subtotal = cart.subtotal
+        shipping_cost = self._calculate_shipping(address.county)
+        discount_amount = 0
+        coupon = None
+        coupon_code = serializer.validated_data.get('coupon_code', '')
+        
+        # Apply coupon if provided
+        if coupon_code:
+            try:
+                coupon = Coupon.objects.get(code=coupon_code, is_active=True)
+                if coupon.discount_type == 'percentage':
+                    discount_amount = (subtotal * coupon.discount_value) / 100
+                else:  # fixed
+                    discount_amount = coupon.discount_value
+                
+                # Ensure discount doesn't exceed subtotal
+                discount_amount = min(discount_amount, subtotal)
+            except Coupon.DoesNotExist:
+                pass
+        
+        total = subtotal + shipping_cost - discount_amount
+        
+        # Validate stock availability for all items
+        for cart_item in cart.items.all():
+            if cart_item.variant.stock < cart_item.quantity:
+                return Response(
+                    {'error': f'{cart_item.variant.product.name} has insufficient stock'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Create order
+        order = Order.objects.create(
+            user=request.user,
+            shipping_address=address,
+            shipping_full_name=address.full_name,
+            shipping_phone=address.phone_number,
+            shipping_county=address.county,
+            shipping_town=address.town,
+            shipping_ward=address.ward,
+            shipping_street=address.street,
+            shipping_landmark=address.landmark,
+            subtotal=subtotal,
+            shipping_cost=shipping_cost,
+            discount_amount=discount_amount,
+            total=total,
+            coupon=coupon,
+            coupon_code=coupon_code,
+            customer_notes=serializer.validated_data.get('customer_notes', ''),
+            ip_address=self._get_client_ip(request)
+        )
+        
+        # Create order items and update stock
+        for cart_item in cart.items.all():
+            OrderItem.objects.create(
+                order=order,
+                variant=cart_item.variant,
+                quantity=cart_item.quantity,
+                price=cart_item.variant.price
+            )
+            
+            # Reduce stock
+            cart_item.variant.stock -= cart_item.quantity
+            cart_item.variant.save()
+        
+        # Update coupon usage if applied
+        if coupon:
+            coupon.uses_count += 1
+            coupon.save()
+        
+        # Clear cart
+        cart.items.all().delete()
+        
+        # Create order status history
+        OrderStatusHistory.objects.create(
+            order=order,
+            old_status='',
+            new_status='pending',
+            notes='Order created'
+        )
+        
+        # Return order details with payment info
+        return Response({
+            'order': OrderDetailSerializer(order).data,
+            'payment_method': serializer.validated_data['payment_method'],
+            'message': 'Order created successfully. Proceed to payment.'
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel an order (only if pending or paid)."""
+        order = self.get_object()
+        
+        if order.status not in ['pending', 'paid']:
+            return Response(
+                {'error': 'Order cannot be cancelled at this stage'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Restore stock
+        for item in order.items.all():
+            item.variant.stock += item.quantity
+            item.variant.save()
+        
+        # Update order status
+        order.status = 'cancelled'
+        order.save()
+        
+        # Create status history
+        OrderStatusHistory.objects.create(
+            order=order,
+            old_status=order.status,
+            new_status='cancelled',
+            notes='Cancelled by customer'
+        )
+        
+        return Response({'message': 'Order cancelled successfully'})
+    
+    def _calculate_shipping(self, county):
+        """
+        Calculate shipping cost based on county.
+        Simplified version - can be enhanced with distance/weight calculations.
+        """
+        # Nairobi and surrounding counties
+        nairobi_counties = ['Nairobi', 'Kiambu', 'Machakos', 'Kajiado']
+        
+        if county in nairobi_counties:
+            return 200  # KES 200
+        else:
+            return 500  # KES 500 for other counties
+    
+    def _get_client_ip(self, request):
+        """Get client IP address from request."""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
