@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-beta] - 2026-03-04
+
 ### Added
+- Complete database schema with all core ecommerce models
+- Product models: Product, ProductVariant, ProductImage, Category, InventoryLog
+- Vendor models: VendorProfile, VendorPayout, VendorEarning
+- Order models: Order, OrderItem, OrderStatusHistory, Cart, CartItem, Wishlist, WishlistItem
+- Payment models: Payment, StripePayment, MPesaPayment, Refund
+- Review and Coupon models
+- Comprehensive Django admin interfaces for all models
+- Product API endpoints with filtering, search, and ordering
+- DRF serializers for products, categories, reviews, and coupons
+- Unit tests for product models
+- API documentation via drf-spectacular
 - JWT authentication system with login and refresh tokens
 - User registration with password validation
 - Email verification workflow (tokens generated, email sending in Phase 6)
@@ -21,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Login and registration pages with form validation
 - Protected routes and authentication state management
 - Comprehensive test coverage for authentication APIs
+
+### Technical Stack
+- Backend: Django 5.0, DRF, PostgreSQL, Redis, Celery
+- Frontend: React 18, Vite, Zustand, React Query
+- Infrastructure: Docker Compose with health checks
+- CI/CD: GitHub Actions for backend and frontend
 
 ## [0.0.1-alpha] - 2026-03-04
 
