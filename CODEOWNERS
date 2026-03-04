@@ -1,0 +1,26 @@
+# CODEOWNERS file for SmartCommerce Kenya
+# These owners will be requested for review when someone opens a pull request.
+
+# Default owner for everything in the repo
+* @franklineXonguti
+
+# Backend code
+/backend/ @franklineXonguti
+
+# Frontend code
+/frontend/ @franklineXonguti
+
+# Infrastructure and DevOps
+/docker-compose.yml @franklineXonguti
+/Dockerfile @franklineXonguti
+/.github/ @franklineXonguti
+
+# Documentation
+*.md @franklineXonguti
+/docs/ @franklineXonguti
+
+# Configuration files
+*.yml @franklineXonguti
+*.yaml @franklineXonguti
+*.json @franklineXonguti
+.env.example @franklineXonguti
