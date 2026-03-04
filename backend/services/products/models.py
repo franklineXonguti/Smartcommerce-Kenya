@@ -191,6 +191,17 @@ class ProductVariant(models.Model):
         if self.color:
             variant_info.append(f"Color: {self.color}")
         return f"{self.product.name} - {', '.join(variant_info) if variant_info else self.sku}"
+    
+    def save(self, *args, **kwargs):
+        # Auto-generate SKU if not provided
+        if not self.sku:
+            from .utils import generate_sku
+            variant_attrs = {
+                'color': self.color,
+                'size': self.size
+            }
+            self.sku = generate_sku(self.product.name, variant_attrs)
+        super().save(*args, **kwargs)
 
     @property
     def is_low_stock(self):
